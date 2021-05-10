@@ -24,11 +24,12 @@ type Task struct {
 
 type Coordinator struct {
 	// Your definitions here.
-	TaskCount int
-	Files     []string
-	MapTasks  map[string]*Task
-	NReduce   int
-	Lock      sync.Mutex
+	TaskCount   int
+	Files       []string
+	MapTasks    map[string]*Task
+	ReduceTasks map[int]*Task
+	NReduce     int
+	Lock        sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -85,6 +86,46 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 	}
 
 	// TODO: Add reduce job logic
+	unfinishedReduceTasks := 0
+	for i := 0; i < c.NReduce; i++ {
+		task, ok := c.ReduceTasks[i]
+		if ok {
+			if task.Status == TaskDone {
+				continue
+			} else if task.Status == TaskStarted {
+				unfinishedReduceTasks++
+				duration := time.Since(task.StartTime)
+				if duration.Seconds() > 10.0 {
+					// Consider the task failed, abort and restart
+					fmt.Println("Task Restarted")
+
+					c.TaskCount++
+					c.ReduceTasks[i] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
+					reply.Partition = i
+					reply.Type = ReduceJob
+					reply.Id = c.TaskCount
+					reply.NReduce = c.NReduce
+					reply.Files = c.Files
+					return nil
+				}
+			}
+		} else {
+			c.TaskCount++
+			c.ReduceTasks[i] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
+			reply.Partition = i
+			reply.Type = ReduceJob
+			reply.Id = c.TaskCount
+			reply.NReduce = c.NReduce
+			reply.Files = c.Files
+			return nil
+		}
+	}
+
+	if unfinishedReduceTasks > 0 {
+		reply.Type = Wait
+		return nil
+	}
+
 	reply.Type = CanExit
 	return nil
 }
@@ -95,19 +136,28 @@ func (c *Coordinator) SubmitJob(args *MRJobArgs, reply *MRJobReply) error {
 	switch args.Type {
 	case MapJob:
 		for _, v := range c.MapTasks {
-			if v.Id == args.Id {
-				duration := time.Since(v.StartTime)
-				if duration.Seconds() < 10.0 {
-					v.Status = TaskDone
-					fmt.Println("Task Done")
-				} else {
-					fmt.Println("Task Expired")
-				}
-			}
+			v.AcceptTaskOrNot(args.Id)
+		}
+		return nil
+	case ReduceJob:
+		for _, v := range c.ReduceTasks {
+			v.AcceptTaskOrNot(args.Id)
 		}
 		return nil
 	default:
 		return nil
+	}
+}
+
+func (task *Task) AcceptTaskOrNot(expectedTaskId int) {
+	if task.Id == expectedTaskId {
+		duration := time.Since(task.StartTime)
+		if duration.Seconds() < 10.0 {
+			task.Status = TaskDone
+			fmt.Println("Task Done")
+		} else {
+			fmt.Println("Task Expired")
+		}
 	}
 }
 
@@ -132,11 +182,21 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
+	c.Lock.Lock()
+	defer c.Lock.Unlock()
 
 	// Your code here.
+	for i := 0; i < c.NReduce; i++ {
+		if task, ok := c.ReduceTasks[i]; ok {
+			if task.Status != TaskDone {
+				return false
+			}
+		} else {
+			return false
+		}
+	}
 
-	return ret
+	return true
 }
 
 //
@@ -146,9 +206,10 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{Files: files, NReduce: nReduce}
-	c.MapTasks = make(map[string]*Task)
 
 	// Your code here.
+	c.MapTasks = make(map[string]*Task)
+	c.ReduceTasks = make(map[int]*Task)
 
 	c.server()
 	return &c

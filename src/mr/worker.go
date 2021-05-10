@@ -75,7 +75,10 @@ func PollTask(
 			fmt.Printf("Do Map Job with File %v\n", reply.File)
 			// TODO Do Real Map Job
 			DoMap(reply.File, reply.NReduce, mapf)
-			NotifyMapJobDone(reply.Id)
+			NotifyJobDone(reply.Id, MapJob)
+		case ReduceJob:
+			DoReduce(reply.Partition, reply.NReduce, reply.Files, reducef)
+			NotifyJobDone(reply.Id, ReduceJob)
 		default:
 			fmt.Printf("Unknown Job Type")
 		}
@@ -84,8 +87,8 @@ func PollTask(
 	fmt.Println("All Jobs Done, Exit Now!")
 }
 
-func NotifyMapJobDone(id int) {
-	args := MRJobArgs{Id: id, Type: MapJob}
+func NotifyJobDone(id int, JobType string) {
+	args := MRJobArgs{Id: id, Type: JobType}
 
 	// declare a reply structure.
 	reply := MRJobReply{}
@@ -94,7 +97,7 @@ func NotifyMapJobDone(id int) {
 	call("Coordinator.SubmitJob", &args, &reply)
 }
 
-func DoMapMock() {
+func DoJobMock() {
 	rand.Seed(time.Now().UnixNano())
 	n := rand.Intn(15) // n will be between 0 and 10
 	fmt.Printf("Sleeping %d seconds...\n", n)
@@ -142,14 +145,58 @@ func DoMap(filename string, nReduce int, mapf func(string, string) []KeyValue) {
 		ofile, _ := os.Create(oname)
 		enc := json.NewEncoder(ofile)
 		for _, kv := range partitions[i] {
-			err := enc.Encode(&kv)
-			if err != nil {
-				panic("Failed to encode data")
-			}
+			enc.Encode(&kv)
 		}
 
 		ofile.Close()
 	}
+}
+
+func DoReduce(partition int, nReduce int, files []string, reducef func(string, []string) string) {
+	kva := []KeyValue{}
+
+	for _, f := range files {
+		fmt.Println(partition)
+		fmt.Println(f)
+		filename := fmt.Sprintf("mrdist-%v-%v", f, partition)
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+	}
+
+	oname := fmt.Sprintf("mr-out-%v", partition)
+	ofile, _ := os.Create(oname)
+
+	sort.Sort(ByKey(kva))
+	i := 0
+	for i < len(kva) {
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
 }
 
 //

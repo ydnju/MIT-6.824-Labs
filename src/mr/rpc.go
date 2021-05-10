@@ -39,10 +39,12 @@ type MRJobArgs struct {
 }
 
 type MRJobReply struct {
-	File    string
-	Type    string
-	Id      int
-	NReduce int
+	Partition int
+	File      string
+	Files     []string
+	Type      string
+	Id        int
+	NReduce   int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
