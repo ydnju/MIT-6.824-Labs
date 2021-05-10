@@ -1,10 +1,12 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,7 +26,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -34,8 +35,48 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	PollTask()
+}
 
+func PollTask() {
+
+	// declare an argument structure.
+	canExit := false
+	for canExit != true {
+		args := MRJobArgs{}
+
+		// declare a reply structure.
+		reply := MRJobReply{}
+
+		// send the RPC request, wait for the reply.
+		call("Coordinator.AssignJob", &args, &reply)
+
+		fmt.Printf("Job Type :%v\n", reply.Type)
+		switch reply.Type {
+		case CanExit:
+			canExit = true
+		case Wait:
+			time.Sleep(100 * time.Millisecond)
+		case MapJob:
+			fmt.Printf("Do Map Job with File %v\n", reply.File)
+			// Do Real Map Job
+			NotifyMapJobDone(reply.Id)
+		default:
+			fmt.Printf("Unknown Job Type")
+		}
+	}
+
+	fmt.Println("All Jobs Done, Exit Now!")
+}
+
+func NotifyMapJobDone(id int) {
+	args := MRJobArgs{Id: id, Type: MapJob}
+
+	// declare a reply structure.
+	reply := MRJobReply{}
+
+	// send the RPC request, wait for the reply.
+	call("Coordinator.SubmitJob", &args, &reply)
 }
 
 //
