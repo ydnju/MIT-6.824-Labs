@@ -65,16 +65,13 @@ func PollTask(
 		// send the RPC request, wait for the reply.
 		call("Coordinator.AssignJob", &args, &reply)
 
-		fmt.Printf("Job Type :%v\n", reply.Type)
 		switch reply.Type {
 		case CanExit:
 			canExit = true
 		case Wait:
 			time.Sleep(100 * time.Millisecond)
 		case MapJob:
-			fmt.Printf("Do Map Job with File %v\n", reply.File)
-			// TODO Do Real Map Job
-			DoMap(reply.File, reply.NReduce, mapf)
+			DoMap(reply.FileIndex, reply.Files, reply.NReduce, mapf)
 			NotifyJobDone(reply.Id, MapJob)
 		case ReduceJob:
 			DoReduce(reply.Partition, reply.NReduce, reply.Files, reducef)
@@ -104,7 +101,8 @@ func DoJobMock() {
 	time.Sleep(time.Duration(n) * time.Second)
 }
 
-func DoMap(filename string, nReduce int, mapf func(string, string) []KeyValue) {
+func DoMap(fileIndex int, files []string, nReduce int, mapf func(string, string) []KeyValue) {
+	filename := files[fileIndex]
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -141,24 +139,27 @@ func DoMap(filename string, nReduce int, mapf func(string, string) []KeyValue) {
 	}
 
 	for i := 0; i < nReduce; i++ {
-		oname := fmt.Sprintf("mrdist-%v-%v", filename, i)
-		ofile, _ := os.Create(oname)
-		enc := json.NewEncoder(ofile)
+		tmpfile, err := ioutil.TempFile("", "example")
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		enc := json.NewEncoder(tmpfile)
 		for _, kv := range partitions[i] {
 			enc.Encode(&kv)
 		}
 
-		ofile.Close()
+		tmpfile.Close()
+		oname := getIntermediateFileName(fileIndex, i)
+		os.Rename(tmpfile.Name(), oname)
 	}
 }
 
 func DoReduce(partition int, nReduce int, files []string, reducef func(string, []string) string) {
 	kva := []KeyValue{}
 
-	for _, f := range files {
-		fmt.Println(partition)
-		fmt.Println(f)
-		filename := fmt.Sprintf("mrdist-%v-%v", f, partition)
+	for idx := range files {
+		filename := getIntermediateFileName(idx, partition)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -173,8 +174,10 @@ func DoReduce(partition int, nReduce int, files []string, reducef func(string, [
 		}
 	}
 
-	oname := fmt.Sprintf("mr-out-%v", partition)
-	ofile, _ := os.Create(oname)
+	tmpfile, err := ioutil.TempFile("", "example")
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	sort.Sort(ByKey(kva))
 	i := 0
@@ -191,12 +194,18 @@ func DoReduce(partition int, nReduce int, files []string, reducef func(string, [
 		output := reducef(kva[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
-		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+		fmt.Fprintf(tmpfile, "%v %v\n", kva[i].Key, output)
 
 		i = j
 	}
 
-	ofile.Close()
+	tmpfile.Close()
+	oname := fmt.Sprintf("mr-out-%v", partition)
+	os.Rename(tmpfile.Name(), oname)
+}
+
+func getIntermediateFileName(mapId int, partition int) string {
+	return fmt.Sprintf("mr-%v-%v", mapId, partition)
 }
 
 //

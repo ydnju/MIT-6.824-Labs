@@ -40,7 +40,7 @@ type MRJobArgs struct {
 
 type MRJobReply struct {
 	Partition int
-	File      string
+	FileIndex int
 	Files     []string
 	Type      string
 	Id        int

@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -48,7 +47,7 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 	c.Lock.Lock()
 	defer c.Lock.Unlock()
 	unfinishedMapTask := 0
-	for _, f := range c.Files {
+	for idx, f := range c.Files {
 		task, ok := c.MapTasks[f]
 		if ok {
 			if task.Status == TaskDone {
@@ -58,24 +57,25 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 				duration := time.Since(task.StartTime)
 				if duration.Seconds() > 10.0 {
 					// Consider the task failed, abort and restart
-					fmt.Println("Task Restarted")
 
 					c.TaskCount++
 					c.MapTasks[f] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-					reply.File = f
+					reply.FileIndex = idx
 					reply.Type = MapJob
 					reply.Id = c.TaskCount
 					reply.NReduce = c.NReduce
+					reply.Files = c.Files
 					return nil
 				}
 			}
 		} else {
 			c.TaskCount++
 			c.MapTasks[f] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-			reply.File = f
+			reply.FileIndex = idx
 			reply.Type = MapJob
 			reply.Id = c.TaskCount
 			reply.NReduce = c.NReduce
+			reply.Files = c.Files
 			return nil
 		}
 	}
@@ -85,7 +85,6 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 		return nil
 	}
 
-	// TODO: Add reduce job logic
 	unfinishedReduceTasks := 0
 	for i := 0; i < c.NReduce; i++ {
 		task, ok := c.ReduceTasks[i]
@@ -97,7 +96,6 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 				duration := time.Since(task.StartTime)
 				if duration.Seconds() > 10.0 {
 					// Consider the task failed, abort and restart
-					fmt.Println("Task Restarted")
 
 					c.TaskCount++
 					c.ReduceTasks[i] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
@@ -154,9 +152,7 @@ func (task *Task) AcceptTaskOrNot(expectedTaskId int) {
 		duration := time.Since(task.StartTime)
 		if duration.Seconds() < 10.0 {
 			task.Status = TaskDone
-			fmt.Println("Task Done")
 		} else {
-			fmt.Println("Task Expired")
 		}
 	}
 }
