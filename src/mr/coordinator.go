@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -56,11 +57,14 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 				duration := time.Since(task.StartTime)
 				if duration.Seconds() > 10.0 {
 					// Consider the task failed, abort and restart
+					fmt.Println("Task Restarted")
+
 					c.TaskCount++
 					c.MapTasks[f] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
 					reply.File = f
 					reply.Type = MapJob
 					reply.Id = c.TaskCount
+					reply.NReduce = c.NReduce
 					return nil
 				}
 			}
@@ -70,6 +74,7 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 			reply.File = f
 			reply.Type = MapJob
 			reply.Id = c.TaskCount
+			reply.NReduce = c.NReduce
 			return nil
 		}
 	}
@@ -94,6 +99,9 @@ func (c *Coordinator) SubmitJob(args *MRJobArgs, reply *MRJobReply) error {
 				duration := time.Since(v.StartTime)
 				if duration.Seconds() < 10.0 {
 					v.Status = TaskDone
+					fmt.Println("Task Done")
+				} else {
+					fmt.Println("Task Expired")
 				}
 			}
 		}

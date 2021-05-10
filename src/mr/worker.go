@@ -1,10 +1,15 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/rpc"
+	"os"
+	"sort"
 	"time"
 )
 
@@ -15,6 +20,13 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -35,10 +47,12 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
-	PollTask()
+	PollTask(mapf, reducef)
 }
 
-func PollTask() {
+func PollTask(
+	mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
 
 	// declare an argument structure.
 	canExit := false
@@ -59,7 +73,8 @@ func PollTask() {
 			time.Sleep(100 * time.Millisecond)
 		case MapJob:
 			fmt.Printf("Do Map Job with File %v\n", reply.File)
-			// Do Real Map Job
+			// TODO Do Real Map Job
+			DoMap(reply.File, reply.NReduce, mapf)
 			NotifyMapJobDone(reply.Id)
 		default:
 			fmt.Printf("Unknown Job Type")
@@ -77,6 +92,64 @@ func NotifyMapJobDone(id int) {
 
 	// send the RPC request, wait for the reply.
 	call("Coordinator.SubmitJob", &args, &reply)
+}
+
+func DoMapMock() {
+	rand.Seed(time.Now().UnixNano())
+	n := rand.Intn(15) // n will be between 0 and 10
+	fmt.Printf("Sleeping %d seconds...\n", n)
+	time.Sleep(time.Duration(n) * time.Second)
+}
+
+func DoMap(filename string, nReduce int, mapf func(string, string) []KeyValue) {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	file.Close()
+	kva := mapf(filename, string(content))
+	intermediate := []KeyValue{}
+	intermediate = append(intermediate, kva...)
+
+	sort.Sort(ByKey(intermediate))
+
+	partitions := make([][]KeyValue, nReduce)
+	for j := 0; j < nReduce; j++ {
+		partitions[j] = []KeyValue{}
+	}
+
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		part := ihash(intermediate[i].Key) % nReduce
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+
+		for k := i; k < j; k++ {
+			partitions[part] = append(partitions[part], intermediate[k])
+		}
+
+		i = j
+	}
+
+	for i := 0; i < nReduce; i++ {
+		oname := fmt.Sprintf("mrdist-%v-%v", filename, i)
+		ofile, _ := os.Create(oname)
+		enc := json.NewEncoder(ofile)
+		for _, kv := range partitions[i] {
+			err := enc.Encode(&kv)
+			if err != nil {
+				panic("Failed to encode data")
+			}
+		}
+
+		ofile.Close()
+	}
 }
 
 //
