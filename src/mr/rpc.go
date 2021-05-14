@@ -33,18 +33,24 @@ const (
 	Wait      = "Wait"
 )
 
+type SubmitMRJobArgs struct {
+	Type     string
+	Id       int
+	Sequence int
+}
+
+type SubmitMRJobReply struct {
+}
+
 type MRJobArgs struct {
-	Type string
-	Id   int
 }
 
 type MRJobReply struct {
-	Partition int
-	FileIndex int
-	Files     []string
-	Type      string
-	Id        int
-	NReduce   int
+	Sequence int
+	TaskId   int
+	Files    []string
+	Type     string
+	NReduce  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

@@ -11,27 +11,26 @@ import (
 )
 
 const (
-	TaskDone    = "done"
-	TaskStarted = "started"
+	TaskNotStarted = "not started"
+	TaskDone       = "done"
+	TaskStarted    = "started"
 )
 
 type Task struct {
 	Id        int
+	Sequence  int
 	StartTime time.Time
 	Status    string
 }
 
 type Coordinator struct {
-	// Your definitions here.
-	TaskCount   int
-	Files       []string
-	MapTasks    map[string]*Task
-	ReduceTasks map[int]*Task
-	NReduce     int
-	Lock        sync.Mutex
+	TaskSequences int
+	Files         []string
+	MapTasks      []*Task
+	ReduceTasks   []*Task
+	NReduce       int
+	Lock          sync.Mutex
 }
-
-// Your code here -- RPC handlers for the worker to call.
 
 //
 // an example RPC handler.
@@ -43,84 +42,83 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
-func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
-	c.Lock.Lock()
-	defer c.Lock.Unlock()
-	unfinishedMapTask := 0
-	for idx, f := range c.Files {
-		task, ok := c.MapTasks[f]
-		if ok {
-			if task.Status == TaskDone {
-				continue
-			} else if task.Status == TaskStarted {
-				unfinishedMapTask++
-				duration := time.Since(task.StartTime)
-				if duration.Seconds() > 10.0 {
-					// Consider the task failed, abort and restart
+func (reply *MRJobReply) Setup(taskId int, t string, nReduce int, files []string, sequence int) {
+	reply.TaskId = taskId
+	reply.Type = t
+	reply.NReduce = nReduce
+	reply.Files = files
+	reply.Sequence = sequence
+}
 
-					c.TaskCount++
-					c.MapTasks[f] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-					reply.FileIndex = idx
-					reply.Type = MapJob
-					reply.Id = c.TaskCount
-					reply.NReduce = c.NReduce
-					reply.Files = c.Files
-					return nil
-				}
+func PollAndCheckMapJobsAllDone(c *Coordinator, args *MRJobArgs, reply *MRJobReply) bool {
+	unfinishedMapTask := 0
+	for idx := range c.Files {
+		task := c.MapTasks[idx]
+		if task.Status == TaskDone {
+			continue
+		} else if task.Status == TaskStarted {
+			unfinishedMapTask++
+			duration := time.Since(task.StartTime)
+			if duration.Seconds() > 10.0 {
+				c.TaskSequences++
+				c.MapTasks[idx] = &Task{Sequence: c.TaskSequences, StartTime: time.Now(), Status: TaskStarted}
+				reply.Setup(idx, MapJob, c.NReduce, c.Files, c.TaskSequences)
+				return false
 			}
 		} else {
-			c.TaskCount++
-			c.MapTasks[f] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-			reply.FileIndex = idx
-			reply.Type = MapJob
-			reply.Id = c.TaskCount
-			reply.NReduce = c.NReduce
-			reply.Files = c.Files
-			return nil
+			c.TaskSequences++
+			c.MapTasks[idx] = &Task{Sequence: c.TaskSequences, StartTime: time.Now(), Status: TaskStarted}
+			reply.Setup(idx, MapJob, c.NReduce, c.Files, c.TaskSequences)
+			return false
 		}
 	}
 
 	if unfinishedMapTask > 0 {
 		reply.Type = Wait
-		return nil
+		return false
+	} else {
+		return true
 	}
+}
 
+func PollAndCheckJobsAllDone(c *Coordinator, jobType string, tasks []*Task, reply *MRJobReply) bool {
 	unfinishedReduceTasks := 0
-	for i := 0; i < c.NReduce; i++ {
-		task, ok := c.ReduceTasks[i]
-		if ok {
-			if task.Status == TaskDone {
-				continue
-			} else if task.Status == TaskStarted {
-				unfinishedReduceTasks++
-				duration := time.Since(task.StartTime)
-				if duration.Seconds() > 10.0 {
-					// Consider the task failed, abort and restart
-
-					c.TaskCount++
-					c.ReduceTasks[i] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-					reply.Partition = i
-					reply.Type = ReduceJob
-					reply.Id = c.TaskCount
-					reply.NReduce = c.NReduce
-					reply.Files = c.Files
-					return nil
-				}
+	for taskId, task := range tasks {
+		if task.Status == TaskDone {
+			continue
+		} else if task.Status == TaskStarted {
+			unfinishedReduceTasks++
+			duration := time.Since(task.StartTime)
+			if duration.Seconds() > 10.0 {
+				c.TaskSequences++
+				tasks[taskId] = &Task{Sequence: c.TaskSequences, StartTime: time.Now(), Status: TaskStarted}
+				reply.Setup(taskId, jobType, c.NReduce, c.Files, c.TaskSequences)
+				return false
 			}
 		} else {
-			c.TaskCount++
-			c.ReduceTasks[i] = &Task{Id: c.TaskCount, StartTime: time.Now(), Status: TaskStarted}
-			reply.Partition = i
-			reply.Type = ReduceJob
-			reply.Id = c.TaskCount
-			reply.NReduce = c.NReduce
-			reply.Files = c.Files
-			return nil
+			c.TaskSequences++
+			tasks[taskId] = &Task{Sequence: c.TaskSequences, StartTime: time.Now(), Status: TaskStarted}
+			reply.Setup(taskId, jobType, c.NReduce, c.Files, c.TaskSequences)
+			return false
 		}
 	}
 
 	if unfinishedReduceTasks > 0 {
 		reply.Type = Wait
+		return false
+	} else {
+		return true
+	}
+}
+
+func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
+	c.Lock.Lock()
+	defer c.Lock.Unlock()
+	if mapJobsAllDone := PollAndCheckJobsAllDone(c, MapJob, c.MapTasks, reply); !mapJobsAllDone {
+		return nil
+	}
+
+	if reduceJobsAllDone := PollAndCheckJobsAllDone(c, ReduceJob, c.ReduceTasks, reply); !reduceJobsAllDone {
 		return nil
 	}
 
@@ -128,32 +126,29 @@ func (c *Coordinator) AssignJob(args *MRJobArgs, reply *MRJobReply) error {
 	return nil
 }
 
-func (c *Coordinator) SubmitJob(args *MRJobArgs, reply *MRJobReply) error {
+func (c *Coordinator) SubmitJob(args *SubmitMRJobArgs, reply *SubmitMRJobReply) error {
 	c.Lock.Lock()
 	defer c.Lock.Unlock()
 	switch args.Type {
 	case MapJob:
-		for _, v := range c.MapTasks {
-			v.AcceptTaskOrNot(args.Id)
-		}
+		task := c.MapTasks[args.Id]
+		task.AcceptTask()
 		return nil
 	case ReduceJob:
-		for _, v := range c.ReduceTasks {
-			v.AcceptTaskOrNot(args.Id)
-		}
+		task := c.ReduceTasks[args.Id]
+		task.AcceptTask()
+
 		return nil
 	default:
 		return nil
 	}
 }
 
-func (task *Task) AcceptTaskOrNot(expectedTaskId int) {
-	if task.Id == expectedTaskId {
-		duration := time.Since(task.StartTime)
-		if duration.Seconds() < 10.0 {
-			task.Status = TaskDone
-		} else {
-		}
+func (task *Task) AcceptTask() {
+	// Only submit job with same id, if ids are not equal, the task
+	// has been assigned to another worker, and this submission can be discarded
+	if time.Since(task.StartTime).Seconds() < 10.0 {
+		task.Status = TaskDone
 	}
 }
 
@@ -182,12 +177,8 @@ func (c *Coordinator) Done() bool {
 	defer c.Lock.Unlock()
 
 	// Your code here.
-	for i := 0; i < c.NReduce; i++ {
-		if task, ok := c.ReduceTasks[i]; ok {
-			if task.Status != TaskDone {
-				return false
-			}
-		} else {
+	for _, reduceTask := range c.ReduceTasks {
+		if reduceTask.Status != TaskDone {
 			return false
 		}
 	}
@@ -203,9 +194,14 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{Files: files, NReduce: nReduce}
 
-	// Your code here.
-	c.MapTasks = make(map[string]*Task)
-	c.ReduceTasks = make(map[int]*Task)
+	c.MapTasks = make([]*Task, len(files))
+	for i := range c.MapTasks {
+		c.MapTasks[i] = &Task{Status: TaskNotStarted}
+	}
+	c.ReduceTasks = make([]*Task, nReduce)
+	for i := range c.ReduceTasks {
+		c.ReduceTasks[i] = &Task{Status: TaskNotStarted}
+	}
 
 	c.server()
 	return &c

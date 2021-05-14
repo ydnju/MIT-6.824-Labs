@@ -71,24 +71,24 @@ func PollTask(
 		case Wait:
 			time.Sleep(100 * time.Millisecond)
 		case MapJob:
-			DoMap(reply.FileIndex, reply.Files, reply.NReduce, mapf)
-			NotifyJobDone(reply.Id, MapJob)
+			DoMap(reply.TaskId, reply.Files, reply.NReduce, mapf)
+			SubmitJob(reply.TaskId, reply.Sequence, MapJob)
 		case ReduceJob:
-			DoReduce(reply.Partition, reply.NReduce, reply.Files, reducef)
-			NotifyJobDone(reply.Id, ReduceJob)
+			DoReduce(reply.TaskId, reply.NReduce, reply.Files, reducef)
+			SubmitJob(reply.TaskId, reply.Sequence, ReduceJob)
 		default:
 			fmt.Printf("Unknown Job Type")
 		}
 	}
 
-	fmt.Println("All Jobs Done, Exit Now!")
+	//fmt.Println("All Jobs Done, Exit Now!")
 }
 
-func NotifyJobDone(id int, JobType string) {
-	args := MRJobArgs{Id: id, Type: JobType}
+func SubmitJob(id int, sequence int, JobType string) {
+	args := SubmitMRJobArgs{Id: id, Sequence: sequence, Type: JobType}
 
 	// declare a reply structure.
-	reply := MRJobReply{}
+	reply := SubmitMRJobReply{}
 
 	// send the RPC request, wait for the reply.
 	call("Coordinator.SubmitJob", &args, &reply)
